@@ -1,0 +1,105 @@
+# ---------------------------------------------------------------------------
+# OS / editor noise
+# ---------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.tmp
+*.temp
+*.bak
+*.orig
+.idea/
+.vscode/
+
+# ---------------------------------------------------------------------------
+# Secrets / local environment
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.local
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+.venv/
+venv/
+ENV/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+.python-version
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pytype/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+pip-wheel-metadata/
+*.egg-info/
+build/
+dist/
+site/
+
+# ---------------------------------------------------------------------------
+# JavaScript / frontend
+# ---------------------------------------------------------------------------
+node_modules/
+web/node_modules/
+web/dist/
+web/.vite/
+web/coverage/
+web/tsconfig.tsbuildinfo
+web/src/*.js
+web/src/lib/*.js
+web/src/routes/*.js
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---------------------------------------------------------------------------
+# Local runtime logs and process state
+# ---------------------------------------------------------------------------
+.local/
+*.pid
+*.pid.lock
+
+# ---------------------------------------------------------------------------
+# Generated pipeline outputs and local data
+# ---------------------------------------------------------------------------
+outputs/
+data/
+notebooks/.ipynb_checkpoints/
+
+# Large geospatial / raster / tabular artifacts
+*.tif
+*.tiff
+*.gpkg
+*.geojson
+*.parquet
+*.csv
+*.npy
+*.npz
+*.h5
+*.hdf5
+*.nc
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+
+# ---------------------------------------------------------------------------
+# Docker / deployment generated state
+# ---------------------------------------------------------------------------
+.docker/
+docker-compose.override.yml

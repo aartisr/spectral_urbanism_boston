@@ -1,0 +1,47 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+
+  api:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      RUN_EXECUTION_MODE: celery
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - .:/app
+    depends_on:
+      - redis
+
+  worker:
+    build:
+      context: .
+      dockerfile: services/worker/Dockerfile
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - .:/app
+    depends_on:
+      - redis
+
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+      secrets:
+        - npmrc
+    environment:
+      VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8000/api/v1}
+    ports:
+      - "${WEB_PORT:-5173}:5173"
+    depends_on:
+      - api
+
+secrets:
+  npmrc:
+    file: ${NPMRC_FILE:-${HOME}/.npmrc}

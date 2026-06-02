@@ -1,0 +1,11 @@
+Metadata-Version: 2.4
+Name: spectral-urbanism-api
+Version: 0.1.0
+Requires-Python: >=3.10
+Requires-Dist: fastapi>=0.111
+Requires-Dist: uvicorn>=0.30
+Requires-Dist: pydantic>=2.7
+Requires-Dist: pyyaml>=6.0
+Requires-Dist: celery>=5.4
+Requires-Dist: redis>=5.0
+Requires-Dist: httpx>=0.28
