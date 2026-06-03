@@ -1,4 +1,4 @@
-import { useParams } from "@tanstack/react-router";
+import { Link, useParams } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import {
   ColumnDef,
@@ -45,27 +45,44 @@ export function RunDetailPage() {
 
   const artifacts = (artifactsQuery.data?.artifacts ?? []) as Artifact[];
   const table = useReactTable({ data: artifacts, columns, getCoreRowModel: getCoreRowModel() });
+  const status = String(runQuery.data?.status ?? "loading");
+  const runName = String(runQuery.data?.run_name ?? runId);
 
   return (
-    <div>
-      <h2>Run Detail</h2>
-      <p>Run ID: {runId}</p>
-      {runQuery.isLoading && <p>Loading run...</p>}
-      {runQuery.data && (
-        <pre className="code-block">{JSON.stringify(runQuery.data, null, 2)}</pre>
-      )}
+    <main className="page-stack">
+      <header className="page-header-row">
+        <div>
+          <div className="eyebrow">Run Detail</div>
+          <h1>{runName}</h1>
+          <p>{runId}</p>
+        </div>
+        <div className="header-actions">
+          <span className={`status-chip status-${status}`}>{status}</span>
+          <Link className="primary-link-button" to="/map">Open Map</Link>
+        </div>
+      </header>
 
-      <h3 id="live-logs">Live Logs</h3>
-      {logsQuery.isLoading && <p>Loading logs...</p>}
-      {logsQuery.data && !logsQuery.data.available && <p>No logs yet for this run.</p>}
-      {logsQuery.data?.available && (
-        <pre className="code-block run-logs-block">
-          {logsQuery.data.lines.join("\n") || "(empty log)"}
-        </pre>
-      )}
-      {logsQuery.error && <p>Failed to load logs.</p>}
+      <section className="panel-grid">
+        <article className="info-panel">
+          <h2>Metadata</h2>
+          {runQuery.isLoading && <p>Loading run...</p>}
+          {runQuery.data && <pre className="code-block compact-code">{JSON.stringify(runQuery.data, null, 2)}</pre>}
+        </article>
+        <article className="info-panel">
+          <h2 id="live-logs">Live Logs</h2>
+          {logsQuery.isLoading && <p>Loading logs...</p>}
+          {logsQuery.data && !logsQuery.data.available && <p>No logs yet for this run.</p>}
+          {logsQuery.data?.available && (
+            <pre className="code-block run-logs-block">
+              {logsQuery.data.lines.join("\n") || "(empty log)"}
+            </pre>
+          )}
+          {logsQuery.error && <p>Failed to load logs.</p>}
+        </article>
+      </section>
 
-      <h3>Artifacts</h3>
+      <section className="content-panel">
+      <h2>Artifacts</h2>
       <table className="data-table">
         <thead>
           {table.getHeaderGroups().map((headerGroup) => (
@@ -90,6 +107,7 @@ export function RunDetailPage() {
           ))}
         </tbody>
       </table>
-    </div>
+      </section>
+    </main>
   );
 }

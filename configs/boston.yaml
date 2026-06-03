@@ -116,3 +116,10 @@ optimization:
   eval_top_k: 250
   stop_if_nonpositive_gain: true
   corridor_preference_weight: 2.5e-05
+spatial_diagnostics:
+  enabled: true
+  use_as_corridor_preference: true
+  access_low_threshold: 35.0
+  access_very_low_threshold: 20.0
+  sink_ndvi_quantile: 0.75
+  sink_temp_quantile: 0.25

@@ -259,6 +259,20 @@ export function extractStreetSegments(fc?: GeoJSON.FeatureCollection): GeoJSON.F
         cellProps?.heat_corridor === 1 ||
         cellProps?.heat_corridor === "1" ||
         String(cellProps?.heat_corridor).toLowerCase() === "true";
+      const isCheegerBoundary =
+        cellProps?.cheeger_boundary === true ||
+        cellProps?.cheeger_boundary === 1 ||
+        cellProps?.cheeger_boundary === "1" ||
+        String(cellProps?.cheeger_boundary).toLowerCase() === "true";
+      const isLowCoolingAccess =
+        cellProps?.low_cooling_access === true ||
+        cellProps?.low_cooling_access === 1 ||
+        cellProps?.low_cooling_access === "1" ||
+        String(cellProps?.low_cooling_access).toLowerCase() === "true";
+      const cheegerPriority = Number(cellProps?.cheeger_priority ?? 0);
+      const coolingAccess = Number(cellProps?.cooling_access_score ?? 0);
+      const resistanceProxy = Number(cellProps?.cooling_sink_resistance_proxy ?? 0);
+      const interventionSignal = Number(cellProps?.street_intervention_signal ?? 0);
 
       if (existingIndex !== undefined) {
         const existing = segments[existingIndex];
@@ -269,6 +283,22 @@ export function extractStreetSegments(fc?: GeoJSON.FeatureCollection): GeoJSON.F
         props.avg_temp = (currentTemp * currentCount + observedTemp) / (currentCount + 1);
         props.max_temp = Math.max(Number(props.max_temp ?? observedTemp), observedTemp);
         props.is_heat_corridor = Boolean(props.is_heat_corridor) || isHeatCorridor;
+        props.is_cheeger_boundary = Boolean(props.is_cheeger_boundary) || isCheegerBoundary;
+        props.low_cooling_access = Boolean(props.low_cooling_access) || isLowCoolingAccess;
+        props.cheeger_priority = Math.max(Number(props.cheeger_priority ?? 0), Number.isFinite(cheegerPriority) ? cheegerPriority : 0);
+        props.cooling_sink_resistance_proxy = Math.max(
+          Number(props.cooling_sink_resistance_proxy ?? 0),
+          Number.isFinite(resistanceProxy) ? resistanceProxy : 0,
+        );
+        props.street_intervention_signal = Math.max(
+          Number(props.street_intervention_signal ?? 0),
+          Number.isFinite(interventionSignal) ? interventionSignal : 0,
+        );
+        const prevAccess = Number(props.cooling_access_score ?? coolingAccess);
+        props.cooling_access_score = Math.min(
+          Number.isFinite(prevAccess) ? prevAccess : coolingAccess,
+          Number.isFinite(coolingAccess) ? coolingAccess : prevAccess,
+        );
         props.nearby_cells = [...parseNearbyCellIds(props.nearby_cells), cellId];
       } else {
         segmentMap[key] = segments.length;
@@ -286,6 +316,12 @@ export function extractStreetSegments(fc?: GeoJSON.FeatureCollection): GeoJSON.F
             avg_temp: observedTemp,
             max_temp: observedTemp,
             is_heat_corridor: isHeatCorridor,
+            is_cheeger_boundary: isCheegerBoundary,
+            low_cooling_access: isLowCoolingAccess,
+            cheeger_priority: Number.isFinite(cheegerPriority) ? cheegerPriority : 0,
+            cooling_access_score: Number.isFinite(coolingAccess) ? coolingAccess : 0,
+            cooling_sink_resistance_proxy: Number.isFinite(resistanceProxy) ? resistanceProxy : 0,
+            street_intervention_signal: Number.isFinite(interventionSignal) ? interventionSignal : 0,
             nearby_cells: [cellId],
             lng: midpointLng,
             lat: midpointLat,
@@ -318,6 +354,18 @@ export function getStreetRecommendations(
     rawHeatCorridor === 1 ||
     rawHeatCorridor === "1" ||
     String(rawHeatCorridor).toLowerCase() === "true";
+  const isCheegerBoundary =
+    properties.is_cheeger_boundary === true ||
+    properties.is_cheeger_boundary === 1 ||
+    properties.is_cheeger_boundary === "1" ||
+    String(properties.is_cheeger_boundary).toLowerCase() === "true";
+  const lowCoolingAccess =
+    properties.low_cooling_access === true ||
+    properties.low_cooling_access === 1 ||
+    properties.low_cooling_access === "1" ||
+    String(properties.low_cooling_access).toLowerCase() === "true";
+  const cheegerPriority = Number(properties.cheeger_priority ?? 0);
+  const resistanceProxy = Number(properties.cooling_sink_resistance_proxy ?? 0);
 
   const recommendations: Array<{ intervention: string; icon: string; reason: string; detail: string }> = [];
 
@@ -364,17 +412,39 @@ export function getStreetRecommendations(
     const info = interventionMap[intervention];
     if (!info) continue;
 
-    if (isHeatCorridor || (info.minTemp && avgTemp >= info.minTemp)) {
+    if (isHeatCorridor || isCheegerBoundary || lowCoolingAccess || (info.minTemp && avgTemp >= info.minTemp)) {
+      let reason = info.reason;
+      let detail = info.detail;
+      if (intervention === "shade_corridor" && isCheegerBoundary) {
+        reason = "Stabilize a thermal bottleneck";
+        detail = `Cheeger priority ${cheegerPriority.toFixed(0)} marks this street as a weak thermal-network boundary. Build continuous shade, canopy gaps, or sheltered walking links across the segment to reduce exposure where heat flow concentrates.`;
+      } else if ((intervention === "tree" || intervention === "green_space") && lowCoolingAccess) {
+        reason = "Create a nearby cooling sink";
+        detail = `Cooling access is low and resistance is ${resistanceProxy.toFixed(0)}. Add canopy, planting, or pocket green space locally because the street is poorly connected to existing cooling sinks.`;
+      } else if (intervention === "reflective_pavement" && resistanceProxy >= 65) {
+        reason = "Reduce stored pavement heat";
+        detail = "High cooling resistance means the street cannot rely on nearby cool/green cells; reflective pavement can reduce heat storage on exposed street surfaces.";
+      }
       recommendations.push({
         intervention,
         icon: info.icon,
-        reason: info.reason,
-        detail: info.detail,
+        reason,
+        detail,
       });
     }
   }
 
-  return recommendations.slice(0, 4);
+  return recommendations
+    .sort((a, b) => {
+      const priority = (rec: typeof recommendations[number]) => {
+        if (rec.intervention === "shade_corridor" && isCheegerBoundary) return 4;
+        if ((rec.intervention === "tree" || rec.intervention === "green_space") && lowCoolingAccess) return 3;
+        if (rec.intervention === "reflective_pavement" && resistanceProxy >= 65) return 2;
+        return 1;
+      };
+      return priority(b) - priority(a);
+    })
+    .slice(0, 4);
 }
 
 type InterventionPlacementLocation = {
@@ -486,6 +556,9 @@ type PlacementCandidate = {
   cellId: string;
   temp: number;
   heatCorridor: boolean;
+  cheegerBoundary: boolean;
+  lowCoolingAccess: boolean;
+  coolingResistance: number;
   selected: boolean;
   selectedKinds: string[];
   score: number;
@@ -610,7 +683,16 @@ function interventionLocation(
   });
 
   const tempText = Number.isFinite(candidate?.temp) ? `${candidate?.temp.toFixed(1)} C` : "unknown temp";
-  const heatText = candidate?.heatCorridor ? "heat-corridor cell" : "nearby warm cell";
+  const heatText = candidate?.cheegerBoundary
+    ? "Cheeger bottleneck cell"
+    : candidate?.lowCoolingAccess
+      ? "low cooling-access cell"
+      : candidate?.heatCorridor
+        ? "heat-corridor cell"
+        : "nearby warm cell";
+  const resistanceText = Number.isFinite(candidate?.coolingResistance)
+    ? `cooling resistance ${Number(candidate?.coolingResistance).toFixed(0)}`
+    : "cooling resistance unavailable";
   const selectedText = candidate?.selected ? "optimizer-selected" : "candidate";
   const cellText = candidate?.cellId ? `cell ${candidate.cellId}` : "street segment";
 
@@ -620,7 +702,7 @@ function interventionLocation(
       lng: p.lng + normalLng * 0.00007,
       lat: p.lat + normalLat * 0.00007,
       label: `continuous shade line at ${cellText}`,
-      suitability: `${heatText}; ${selectedText}; ${tempText}`,
+      suitability: `${heatText}; ${resistanceText}; ${selectedText}; ${tempText}`,
     };
   }
   if (kind === "tree") {
@@ -630,7 +712,7 @@ function interventionLocation(
       lng: p.lng + normalLng * 0.0001 * side,
       lat: p.lat + normalLat * 0.0001 * side,
       label: `curb tree cluster at ${cellText}`,
-      suitability: `${heatText}; ${selectedText}; ${tempText}`,
+      suitability: `${heatText}; ${resistanceText}; ${selectedText}; ${tempText}`,
     };
   }
   if (kind === "reflective_pavement") {
@@ -639,7 +721,7 @@ function interventionLocation(
       lng: p.lng,
       lat: p.lat,
       label: `cool pavement zone at ${cellText}`,
-      suitability: `${heatText}; high pavement exposure proxy; ${tempText}`,
+      suitability: `${heatText}; ${resistanceText}; high pavement exposure proxy; ${tempText}`,
     };
   }
   if (kind === "cool_roof") {
@@ -674,6 +756,19 @@ export function buildHeatCorridorActionPlan(
     properties?.is_heat_corridor === 1 ||
     properties?.is_heat_corridor === "1" ||
     String(properties?.is_heat_corridor).toLowerCase() === "true";
+  const isCheegerBoundary =
+    properties?.is_cheeger_boundary === true ||
+    properties?.is_cheeger_boundary === 1 ||
+    properties?.is_cheeger_boundary === "1" ||
+    String(properties?.is_cheeger_boundary).toLowerCase() === "true";
+  const lowCoolingAccess =
+    properties?.low_cooling_access === true ||
+    properties?.low_cooling_access === 1 ||
+    properties?.low_cooling_access === "1" ||
+    String(properties?.low_cooling_access).toLowerCase() === "true";
+  const cheegerPriority = Number(properties?.cheeger_priority ?? 0);
+  const resistanceProxy = Number(properties?.cooling_sink_resistance_proxy ?? 0);
+  const hasDiagnosticNeed = isCheegerBoundary || lowCoolingAccess || cheegerPriority >= 45 || resistanceProxy >= 65;
 
   if (!properties || !Number.isFinite(avgTemp) || !Number.isFinite(Number(threshold))) {
     return {
@@ -692,7 +787,7 @@ export function buildHeatCorridorActionPlan(
     };
   }
 
-  if (!isHeatCorridor) {
+  if (!isHeatCorridor && !hasDiagnosticNeed) {
     return {
       status: "not_corridor",
       summary: "This selected street is already below the current heat-corridor threshold.",
@@ -709,7 +804,12 @@ export function buildHeatCorridorActionPlan(
     };
   }
 
-  const targetCoolingC = Math.max(0.25, avgTemp - Number(threshold) + 0.15);
+  const diagnosticCoolingTarget = Math.max(
+    isCheegerBoundary ? 0.35 : 0,
+    lowCoolingAccess ? 0.3 : 0,
+    cheegerPriority >= 70 || resistanceProxy >= 80 ? 0.5 : 0,
+  );
+  const targetCoolingC = Math.max(0.25, avgTemp - Number(threshold) + 0.15, diagnosticCoolingTarget);
   const confidenceTarget = Math.max(0.5, Math.min(0.95, requiredConfidence));
   const planningCoolingTarget = targetCoolingC * (1 + Math.max(0, confidenceTarget - 0.6) * 1.35);
   const nearbyCells = new Set(parseNearbyCellIds(properties.nearby_cells));
@@ -818,9 +918,22 @@ export function buildHeatCorridorActionPlan(
         props.heat_corridor === 1 ||
         props.heat_corridor === "1" ||
         String(props.heat_corridor).toLowerCase() === "true";
+      const cheegerBoundary =
+        props.cheeger_boundary === true ||
+        props.cheeger_boundary === 1 ||
+        props.cheeger_boundary === "1" ||
+        String(props.cheeger_boundary).toLowerCase() === "true";
+      const lowAccess =
+        props.low_cooling_access === true ||
+        props.low_cooling_access === 1 ||
+        props.low_cooling_access === "1" ||
+        String(props.low_cooling_access).toLowerCase() === "true";
       const score =
         (Number.isFinite(temp) ? (temp - minLocalTemp) / tempSpread : 0) +
         (heatCorridor ? 0.45 : 0) +
+        (cheegerBoundary ? 0.5 : 0) +
+        (lowAccess ? 0.35 : 0) +
+        Math.min(0.35, Number(props.cooling_sink_resistance_proxy ?? 0) / 300) +
         (selected ? 0.35 : 0) +
         Math.min(0.2, kinds.length * 0.05);
       return center
@@ -830,6 +943,9 @@ export function buildHeatCorridorActionPlan(
             cellId: String(props.cell_id ?? "cell"),
             temp,
             heatCorridor,
+            cheegerBoundary,
+            lowCoolingAccess: lowAccess,
+            coolingResistance: Number(props.cooling_sink_resistance_proxy ?? 0),
             selected,
             selectedKinds: kinds,
             score,
@@ -899,7 +1015,9 @@ export function buildHeatCorridorActionPlan(
 
     scenarios.push({
       status: "ready",
-      summary: `Estimated ${interventionCount} targeted intervention${interventionCount === 1 ? "" : "s"} to bring this street below the heat-corridor threshold. Raise required confidence to test a more redundant intervention mix.`,
+      summary: hasDiagnosticNeed && !isHeatCorridor
+        ? `Estimated ${interventionCount} targeted intervention${interventionCount === 1 ? "" : "s"} for a Cheeger/cooling-access priority street that is not currently above the heat threshold.`
+        : `Estimated ${interventionCount} targeted intervention${interventionCount === 1 ? "" : "s"} to bring this street below the heat-corridor threshold. Raise required confidence to test a more redundant intervention mix.`,
       probability,
       targetCoolingC: Number(targetCoolingC.toFixed(2)),
       estimatedCoolingC: Number(estimatedCoolingC.toFixed(2)),
@@ -907,7 +1025,7 @@ export function buildHeatCorridorActionPlan(
       estimatedBudget: hasCompleteBudget ? Number(knownBudget.toFixed(2)) : null,
       budgetRange: hasCompleteBudget && budgetLow !== null && budgetHigh !== null ? [budgetLow, budgetHigh] : null,
       interventionCount,
-      method: "Planning-grade scenario planner: ranks feasible mixes using EPA-grounded mitigation families, local temperature gap to the run threshold, configured costs, adjacent grid-cell heat, optimizer-selected cells, street-segment geometry, and low/mid/high cooling uncertainty bands. Placement markers are block-level candidates, not surveyed curb assets.",
+      method: "Planning-grade scenario planner: ranks feasible mixes using EPA-grounded mitigation families, local temperature gap to the run threshold, Cheeger bottleneck priority, cooling-sink resistance, configured costs, adjacent grid-cell heat, optimizer-selected cells, street-segment geometry, and low/mid/high cooling uncertainty bands. Placement markers are block-level candidates, not surveyed curb assets.",
       evidenceSources: HEAT_MITIGATION_EVIDENCE,
       actions,
     });

@@ -58,6 +58,16 @@ type RunMapResponse = {
   intervention_costs: Record<string, number>;
   intervention_icon_legend: Record<string, string>;
   selected_intervention_kinds: string[];
+  cheeger_bottleneck_geojson?: GeoJSON.FeatureCollection;
+  low_cooling_access_geojson?: GeoJSON.FeatureCollection;
+  cheeger_resistance_summary?: {
+    enabled?: boolean;
+    cheeger_boundary_cells?: number;
+    low_cooling_access_cells?: number;
+    cheeger_conductance?: number;
+    access_low_threshold?: number;
+    resistance_definition?: string;
+  };
   geojson: GeoJSON.FeatureCollection;
 };
 
@@ -197,6 +207,8 @@ function MapLibreRunMapCanvas({
   data,
   mapKey,
   showHeatCorridors,
+  showCheegerBottleneck,
+  showCoolingResistance,
   showInterventions,
   showInterventionCircles,
   animateCircles,
@@ -210,11 +222,14 @@ function MapLibreRunMapCanvas({
   addressFocus,
   plannedInterventions,
   requiredConfidence,
+  resetViewToken,
   onAnimationStateChange,
 }: {
   data?: RunMapResponse;
   mapKey: string;
   showHeatCorridors: boolean;
+  showCheegerBottleneck: boolean;
+  showCoolingResistance: boolean;
   showInterventions: boolean;
   showInterventionCircles: boolean;
   animateCircles: boolean;
@@ -228,6 +243,7 @@ function MapLibreRunMapCanvas({
   addressFocus?: AddressFocusRequest | null;
   plannedInterventions?: GeoJSON.FeatureCollection;
   requiredConfidence: number;
+  resetViewToken: number;
   onAnimationStateChange?: (status: AnimationStatus) => void;
 }) {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
@@ -246,6 +262,12 @@ function MapLibreRunMapCanvas({
   const streetSourceId = `street-segments-${mapKey}`;
   const streetHitLineId = `street-segments-hit-${mapKey}`;
   const streetLineId = `street-segments-line-${mapKey}`;
+  const cheegerSourceId = `cheeger-bottleneck-source-${mapKey}`;
+  const cheegerFillId = `cheeger-bottleneck-fill-${mapKey}`;
+  const cheegerLineId = `cheeger-bottleneck-line-${mapKey}`;
+  const coolingSourceId = `cooling-resistance-source-${mapKey}`;
+  const coolingFillId = `cooling-resistance-fill-${mapKey}`;
+  const coolingLineId = `cooling-resistance-line-${mapKey}`;
   const cityFocusSourceId = `city-focus-source-${mapKey}`;
   const cityFocusHaloLayerId = `city-focus-halo-${mapKey}`;
   const cityFocusCoreLayerId = `city-focus-core-${mapKey}`;
@@ -258,6 +280,7 @@ function MapLibreRunMapCanvas({
   const plannedInterventionLayerId = `planned-interventions-layer-${mapKey}`;
   const plannedInterventionLabelLayerId = `planned-interventions-label-${mapKey}`;
   const plannedInterventionPulseFrameRef = useRef<number | null>(null);
+  const [mapStyleReadyTick, setMapStyleReadyTick] = useState(0);
   const getHeatSourceId = (source: HeatCorridorLayer["source"]) => `heat-corridor-source-${source}-${mapKey}`;
   const getHeatLayerId = (source: HeatCorridorLayer["source"]) => `heat-corridor-layer-${source}-${mapKey}`;
   const getHeatOutlineId = (source: HeatCorridorLayer["source"]) => `heat-corridor-outline-${source}-${mapKey}`;
@@ -297,6 +320,55 @@ function MapLibreRunMapCanvas({
       if (map.getLayer(id)) {
         map.moveLayer(id);
       }
+    }
+  };
+
+  const bringHeatCorridorLayersToFront = (map: maplibregl.Map) => {
+    for (const layer of heatCorridorLayers) {
+      for (const id of [getHeatLayerId(layer.source), getHeatOutlineId(layer.source)]) {
+        if (map.getLayer(id)) {
+          map.moveLayer(id);
+        }
+      }
+    }
+  };
+
+  const setLayerVisibility = (map: maplibregl.Map, id: string, visible: boolean) => {
+    if (map.getLayer(id)) {
+      map.setLayoutProperty(id, "visibility", visible ? "visible" : "none");
+    }
+  };
+
+  const applyLayerCheckboxState = (map: maplibregl.Map) => {
+    for (const layer of heatCorridorLayers) {
+      const visible = showHeatCorridors && layer.visible;
+      setLayerVisibility(map, getHeatLayerId(layer.source), visible);
+      setLayerVisibility(map, getHeatOutlineId(layer.source), visible);
+    }
+
+    setLayerVisibility(map, cheegerFillId, showCheegerBottleneck);
+    setLayerVisibility(map, cheegerLineId, showCheegerBottleneck);
+    setLayerVisibility(map, coolingFillId, showCoolingResistance);
+    setLayerVisibility(map, coolingLineId, showCoolingResistance);
+
+    setLayerVisibility(map, selFillId, showInterventions);
+    setLayerVisibility(map, selLineId, showInterventions);
+    const showInterventionMarkers = showInterventions && showInterventionCircles;
+    setLayerVisibility(map, plannedInterventionHaloLayerId, showInterventionMarkers);
+    setLayerVisibility(map, plannedInterventionGlowLayerId, showInterventionMarkers);
+    setLayerVisibility(map, plannedInterventionLayerId, showInterventionMarkers);
+    setLayerVisibility(map, plannedInterventionLabelLayerId, showInterventionMarkers);
+    for (const marker of plannedInterventionMarkerElementsRef.current) {
+      marker.style.display = showInterventionMarkers ? "" : "none";
+    }
+
+    setLayerVisibility(map, streetLineId, streetLevelMode);
+    setLayerVisibility(map, streetHitLineId, streetLevelMode);
+    setLayerVisibility(map, `study-area-boundary-${mapKey}-outline`, showStudyAreaBoundary);
+
+    if (!streetLevelMode) {
+      map.getCanvas().style.cursor = "";
+      popupRef.current?.remove();
     }
   };
 
@@ -380,6 +452,7 @@ function MapLibreRunMapCanvas({
     popupRef.current = popup;
 
     mapRef.current = map;
+    map.once("load", () => setMapStyleReadyTick((tick) => tick + 1));
 
     return () => {
       if (heatmapAnimationFrameRef.current !== null) {
@@ -419,18 +492,8 @@ function MapLibreRunMapCanvas({
     if (!map) {
       return;
     }
-
-    for (const id of [streetLineId, streetHitLineId]) {
-      if (map.getLayer(id)) {
-        map.setLayoutProperty(id, "visibility", streetLevelMode ? "visible" : "none");
-      }
-    }
-
-    if (!streetLevelMode) {
-      map.getCanvas().style.cursor = "";
-      popupRef.current?.remove();
-    }
-  }, [streetLevelMode, streetHitLineId, streetLineId]);
+    applyLayerCheckboxState(map);
+  }, [streetLevelMode, mapStyleReadyTick]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -491,9 +554,120 @@ function MapLibreRunMapCanvas({
       ensureHeatCorridorLayer(map, layer);
     }
 
-    // Keep selected interventions above heat-corridor overlays.
+    // Keep heat overlays visible above the base thermal fill, with selected
+    // interventions above the overlays.
+    bringHeatCorridorLayersToFront(map);
     bringInterventionLayersToFront(map);
-  }, [heatCorridorLayers]);
+    applyLayerCheckboxState(map);
+  }, [heatCorridorLayers, mapStyleReadyTick, showHeatCorridors]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !map.isStyleLoaded()) {
+      return;
+    }
+
+    const cheegerData = data?.cheeger_bottleneck_geojson ?? { type: "FeatureCollection", features: [] };
+    if (!map.getSource(cheegerSourceId)) {
+      map.addSource(cheegerSourceId, { type: "geojson", data: cheegerData });
+    } else {
+      (map.getSource(cheegerSourceId) as maplibregl.GeoJSONSource).setData(cheegerData);
+    }
+    if (!map.getLayer(cheegerFillId)) {
+      map.addLayer({
+        id: cheegerFillId,
+        type: "fill",
+        source: cheegerSourceId,
+        paint: {
+          "fill-color": [
+            "interpolate",
+            ["linear"],
+            ["to-number", ["coalesce", ["get", "cheeger_priority"], 0]],
+            0,
+            "rgba(251, 146, 60, 0.12)",
+            45,
+            "rgba(249, 115, 22, 0.42)",
+            70,
+            "rgba(220, 38, 38, 0.66)",
+          ],
+          "fill-opacity": showCheegerBottleneck ? 0.78 : 0,
+        },
+      });
+    }
+    if (!map.getLayer(cheegerLineId)) {
+      map.addLayer({
+        id: cheegerLineId,
+        type: "line",
+        source: cheegerSourceId,
+        paint: {
+          "line-color": "#991b1b",
+          "line-width": ["interpolate", ["linear"], ["zoom"], 9, 1.2, 14, 3.2, 17, 5],
+          "line-opacity": showCheegerBottleneck ? 0.95 : 0,
+        },
+      });
+    }
+
+    const coolingData = data?.low_cooling_access_geojson ?? { type: "FeatureCollection", features: [] };
+    if (!map.getSource(coolingSourceId)) {
+      map.addSource(coolingSourceId, { type: "geojson", data: coolingData });
+    } else {
+      (map.getSource(coolingSourceId) as maplibregl.GeoJSONSource).setData(coolingData);
+    }
+    if (!map.getLayer(coolingFillId)) {
+      map.addLayer({
+        id: coolingFillId,
+        type: "fill",
+        source: coolingSourceId,
+        paint: {
+          "fill-color": [
+            "interpolate",
+            ["linear"],
+            ["to-number", ["coalesce", ["get", "cooling_sink_resistance_proxy"], 0]],
+            35,
+            "rgba(14, 165, 233, 0.18)",
+            65,
+            "rgba(37, 99, 235, 0.44)",
+            90,
+            "rgba(30, 64, 175, 0.68)",
+          ],
+          "fill-opacity": showCoolingResistance ? 0.7 : 0,
+        },
+      });
+    }
+    if (!map.getLayer(coolingLineId)) {
+      map.addLayer({
+        id: coolingLineId,
+        type: "line",
+        source: coolingSourceId,
+        paint: {
+          "line-color": "#bfdbfe",
+          "line-width": ["interpolate", ["linear"], ["zoom"], 9, 0.8, 14, 2.2, 17, 3.4],
+          "line-opacity": showCoolingResistance ? 0.88 : 0,
+        },
+      });
+    }
+
+    if (map.getLayer(cheegerFillId)) {
+      map.setPaintProperty(cheegerFillId, "fill-opacity", showCheegerBottleneck ? 0.78 : 0);
+    }
+    if (map.getLayer(cheegerLineId)) {
+      map.setPaintProperty(cheegerLineId, "line-opacity", showCheegerBottleneck ? 0.95 : 0);
+    }
+    if (map.getLayer(coolingFillId)) {
+      map.setPaintProperty(coolingFillId, "fill-opacity", showCoolingResistance ? 0.7 : 0);
+    }
+    if (map.getLayer(coolingLineId)) {
+      map.setPaintProperty(coolingLineId, "line-opacity", showCoolingResistance ? 0.88 : 0);
+    }
+    applyLayerCheckboxState(map);
+    bringInterventionLayersToFront(map);
+  }, [
+    data?.cheeger_bottleneck_geojson,
+    data?.low_cooling_access_geojson,
+    mapStyleReadyTick,
+    showCheegerBottleneck,
+    showCoolingResistance,
+  ]);
 
   // Sync study area boundary layer when data changes
   useEffect(() => {
@@ -557,6 +731,7 @@ function MapLibreRunMapCanvas({
         map.setPaintProperty(`${boundaryId}-outline`, "line-opacity", showStudyAreaBoundary ? 0.95 : 0);
       }
     }
+    applyLayerCheckboxState(map);
   }, [data, mapKey, showStudyAreaBoundary]);
 
   useEffect(() => {
@@ -621,6 +796,7 @@ function MapLibreRunMapCanvas({
             map.setPaintProperty(fillId, "fill-color", buildThermalGradientExpression(data.geojson) as any);
             map.setPaintProperty(fillId, "fill-opacity", heatFillOpacity);
           }
+          applyLayerCheckboxState(map);
           bringInterventionLayersToFront(map);
         }
         return;
@@ -782,6 +958,10 @@ function MapLibreRunMapCanvas({
               "case",
               ["boolean", ["feature-state", "hover"], false],
               "#00d4ff",
+              ["boolean", ["get", "is_cheeger_boundary"], false],
+              "#dc2626",
+              ["boolean", ["get", "low_cooling_access"], false],
+              "#2563eb",
               ["boolean", ["get", "is_heat_corridor"], false],
               "#ff6b6b",
               "#999999",
@@ -790,6 +970,10 @@ function MapLibreRunMapCanvas({
               "case",
               ["boolean", ["feature-state", "hover"], false],
               4,
+              ["boolean", ["get", "is_cheeger_boundary"], false],
+              3.2,
+              ["boolean", ["get", "low_cooling_access"], false],
+              2.9,
               ["boolean", ["get", "is_heat_corridor"], false],
               2.5,
               1.5,
@@ -798,6 +982,10 @@ function MapLibreRunMapCanvas({
               "case",
               ["boolean", ["feature-state", "hover"], false],
               1.0,
+              ["boolean", ["get", "is_cheeger_boundary"], false],
+              0.92,
+              ["boolean", ["get", "low_cooling_access"], false],
+              0.82,
               ["boolean", ["get", "is_heat_corridor"], false],
               0.8,
               0.5,
@@ -902,6 +1090,7 @@ function MapLibreRunMapCanvas({
       }
 
       bringInterventionLayersToFront(map);
+      applyLayerCheckboxState(map);
 
       // Set up event listeners
       map.on("mousemove", fillId, (e) => {
@@ -1233,6 +1422,7 @@ function MapLibreRunMapCanvas({
           map.setLayoutProperty(id, "visibility", fc.features.length > 0 ? "visible" : "none");
         }
       }
+      applyLayerCheckboxState(map);
 
       if (plannedInterventionPulseFrameRef.current !== null) {
         cancelAnimationFrame(plannedInterventionPulseFrameRef.current);
@@ -1355,6 +1545,7 @@ function MapLibreRunMapCanvas({
     }
 
     scalePlannedMarkers();
+    applyLayerCheckboxState(map);
     map.on("zoom", scalePlannedMarkers);
     map.on("move", scalePlannedMarkers);
 
@@ -1393,6 +1584,30 @@ function MapLibreRunMapCanvas({
 
     applyZoom();
   }, [data?.run_id, projectionMode]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !data || resetViewToken <= 0) {
+      return;
+    }
+
+    const resetView = () => {
+      if (projectionMode === "globe") {
+        map.easeTo({ center: [-35, 25], zoom: 0.95, pitch: 0, bearing: 0, duration: 520 });
+        return;
+      }
+
+      const [minLon, minLat, maxLon, maxLat] = data.bbox;
+      map.fitBounds([[minLon, minLat], [maxLon, maxLat]], { padding: 44, duration: 420, maxZoom: 11 });
+    };
+
+    if (!map.isStyleLoaded()) {
+      map.once("load", resetView);
+      return;
+    }
+
+    resetView();
+  }, [data?.bbox, projectionMode, resetViewToken]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1621,23 +1836,22 @@ function MapLibreRunMapCanvas({
     if (!map) {
       return;
     }
-    const selFillId = `run-grid-selected-fill-${mapKey}`;
-    const selLineId = `run-grid-selected-line-${mapKey}`;
-
-    const applyVisibility = () => {
-      for (const id of [selFillId, selLineId]) {
-        if (map.getLayer(id)) {
-          map.setLayoutProperty(id, "visibility", showInterventions ? "visible" : "none");
-        }
-      }
-    };
-
     if (!map.isStyleLoaded()) {
-      map.once("load", applyVisibility);
+      map.once("load", () => applyLayerCheckboxState(map));
       return;
     }
-    applyVisibility();
-  }, [mapKey, showInterventionCircles, showHeatCorridors, showInterventions]);
+    applyLayerCheckboxState(map);
+  }, [
+    heatCorridorLayers,
+    mapStyleReadyTick,
+    showCheegerBottleneck,
+    showCoolingResistance,
+    showHeatCorridors,
+    showInterventionCircles,
+    showInterventions,
+    showStudyAreaBoundary,
+    streetLevelMode,
+  ]);
 
   return <div ref={mapContainerRef} className="map-canvas" />;
 }
@@ -1646,6 +1860,8 @@ function RunMapCanvas(props: {
   data?: RunMapResponse;
   mapKey: string;
   showHeatCorridors: boolean;
+  showCheegerBottleneck: boolean;
+  showCoolingResistance: boolean;
   showInterventions: boolean;
   showInterventionCircles: boolean;
   animateCircles: boolean;
@@ -1659,6 +1875,7 @@ function RunMapCanvas(props: {
   addressFocus?: AddressFocusRequest | null;
   plannedInterventions?: GeoJSON.FeatureCollection;
   requiredConfidence: number;
+  resetViewToken: number;
   onAnimationStateChange?: (status: AnimationStatus) => void;
 }) {
   return <MapLibreRunMapCanvas {...props} />;
@@ -1700,6 +1917,8 @@ function MapLegend({ data, minimized }: { data: RunMapResponse; minimized: boole
       <div>📍 <strong>Blue city cells:</strong> Grid areas with temperature data</div>
       <div>🟧 <strong>Landsat heat corridors:</strong> Orange overlay layer</div>
       <div>🟪 <strong>ECOSTRESS heat corridors:</strong> Purple overlay layer</div>
+      <div>🟥 <strong>Cheeger bottleneck priority:</strong> Orange/red vector cells where darker means higher heat plus cooling-access priority.</div>
+      <div>🟦 <strong>Cooling sink resistance:</strong> Blue vector cells where darker means poorer access to inferred cool/green sinks.</div>
       <div>🟢 <strong>Bright green markers:</strong> Selected intervention cells</div>
       <div><strong>Temperature gradient:</strong> Blue (cool) to Red (hot)</div>
       <div><strong>Selected cells:</strong> {data.selected_cells}</div>
@@ -1796,17 +2015,20 @@ export function MapPage() {
   const [showHeatCorridors, setShowHeatCorridors] = useState(true);
   const [showLandsatHeatCorridors, setShowLandsatHeatCorridors] = useState(true);
   const [showEcostressHeatCorridors, setShowEcostressHeatCorridors] = useState(true);
+  const [showCheegerBottleneck, setShowCheegerBottleneck] = useState(true);
+  const [showCoolingResistance, setShowCoolingResistance] = useState(true);
   const [showInterventions, setShowInterventions] = useState(true);
   const [showInterventionCircles, setShowInterventionCircles] = useState(true);
   const [animateCircles, setAnimateCircles] = useState(true);
   const [showLegend, setShowLegend] = useState(false);
   const [minimizeLegend, setMinimizeLegend] = useState(false);
-  const [heatFillOpacity, setHeatFillOpacity] = useState(0.36);
+  const [heatFillOpacity, setHeatFillOpacity] = useState(0.16);
   const [fullscreenMap, setFullscreenMap] = useState<"single" | "left" | "right" | null>(null);
   const [streetLevelMode, setStreetLevelMode] = useState(false);
   const [projectionMode, setProjectionMode] = useState<"mercator" | "globe">("mercator");
   const [showStudyAreaBoundary, setShowStudyAreaBoundary] = useState(true);
   const [requiredConfidence, setRequiredConfidence] = useState(0.72);
+  const [resetViewToken, setResetViewToken] = useState(0);
   const [selectedSource, setSelectedSource] = useState<ThermalSourceName>("landsat");
   const [addressQuery, setAddressQuery] = useState("");
   const [addressLookupError, setAddressLookupError] = useState<string | null>(null);
@@ -2267,6 +2489,155 @@ export function MapPage() {
     setStreetSelectionRightAt(selection ? Date.now() : null);
   };
 
+  const resetLayerDefaults = () => {
+    setStreetLevelMode(false);
+    setShowHeatCorridors(true);
+    setShowLandsatHeatCorridors(true);
+    setShowEcostressHeatCorridors(true);
+    setShowCheegerBottleneck(true);
+    setShowCoolingResistance(true);
+    setShowInterventions(true);
+    setShowInterventionCircles(true);
+    setAnimateCircles(true);
+    setShowStudyAreaBoundary(true);
+    setShowLegend(false);
+    setMinimizeLegend(false);
+    setHeatFillOpacity(0.16);
+  };
+
+  const resetMapView = () => {
+    setFullscreenMap(null);
+    setAddressFocus(null);
+    setAddressLookupResult(null);
+    setStreetSelection(null);
+    setStreetSelectionLeft(null);
+    setStreetSelectionRight(null);
+    setStreetSelectionAt(null);
+    setStreetSelectionLeftAt(null);
+    setStreetSelectionRightAt(null);
+    setResetViewToken((token) => token + 1);
+  };
+
+  const resetMapWorkspace = () => {
+    resetLayerDefaults();
+    setProjectionMode("mercator");
+    resetMapView();
+  };
+
+  const renderLayerRail = (data?: RunMapResponse, title = "Map Controls") => (
+    <aside className="map-layer-rail" aria-label={title}>
+      <div className="map-layer-rail-header">
+        <div>
+          <div className="map-layer-rail-title">{title}</div>
+          <div className="map-layer-rail-subtitle">
+            {data ? `${data.feature_count} cells, ${data.heat_corridor_method.cells} heat-corridor cells` : "Waiting for run data"}
+          </div>
+        </div>
+      </div>
+
+      <div className="map-layer-actions" aria-label="Map reset actions">
+        <button type="button" onClick={resetMapView}>Reset View</button>
+        <button type="button" onClick={resetLayerDefaults}>Reset Layers</button>
+        <button type="button" onClick={resetMapWorkspace}>Reset All</button>
+      </div>
+
+      <div className="map-layer-section">
+        <div className="map-layer-section-title">Analysis Layers</div>
+        <label className="map-switch">
+          <input type="checkbox" checked={showHeatCorridors} onChange={(e) => setShowHeatCorridors(e.target.checked)} />
+          <span>Heat Corridor Overlays</span>
+        </label>
+        <label className="map-switch">
+          <input type="checkbox" checked={showLandsatHeatCorridors} onChange={(e) => setShowLandsatHeatCorridors(e.target.checked)} />
+          <span><span className="layer-swatch layer-swatch-landsat" />Landsat Heat Corridors</span>
+        </label>
+        <label className="map-switch">
+          <input type="checkbox" checked={showEcostressHeatCorridors} onChange={(e) => setShowEcostressHeatCorridors(e.target.checked)} />
+          <span><span className="layer-swatch layer-swatch-ecostress" />ECOSTRESS Heat Corridors</span>
+        </label>
+        <label className="map-switch">
+          <input type="checkbox" checked={showCheegerBottleneck} onChange={(e) => setShowCheegerBottleneck(e.target.checked)} />
+          <span><span className="layer-swatch layer-swatch-cheeger" />Cheeger Bottleneck Priority</span>
+        </label>
+        <label className="map-switch">
+          <input type="checkbox" checked={showCoolingResistance} onChange={(e) => setShowCoolingResistance(e.target.checked)} />
+          <span><span className="layer-swatch layer-swatch-resistance" />Cooling Sink Resistance</span>
+        </label>
+      </div>
+
+      <div className="map-layer-section">
+        <div className="map-layer-section-title">Interaction</div>
+        <label className="map-switch">
+          <input type="checkbox" checked={streetLevelMode} onChange={(e) => setStreetLevelMode(e.target.checked)} />
+          <span>Street Level Mode</span>
+        </label>
+        <label className="map-switch">
+          <input type="checkbox" checked={showInterventions} onChange={(e) => setShowInterventions(e.target.checked)} />
+          <span>Interventions</span>
+        </label>
+        <label className="map-switch">
+          <input type="checkbox" checked={showInterventionCircles} onChange={(e) => setShowInterventionCircles(e.target.checked)} />
+          <span>Intervention Markers</span>
+        </label>
+        <label className="map-switch">
+          <input type="checkbox" checked={animateCircles} onChange={(e) => setAnimateCircles(e.target.checked)} />
+          <span>Marker Animation</span>
+        </label>
+        <label className="map-switch">
+          <input type="checkbox" checked={showStudyAreaBoundary} onChange={(e) => setShowStudyAreaBoundary(e.target.checked)} />
+          <span>Study Area Boundary</span>
+        </label>
+      </div>
+
+      <div className="map-layer-section">
+        <div className="map-layer-section-title">View</div>
+        <div className="map-segmented-control" role="group" aria-label="Projection mode">
+          <button type="button" className={projectionMode === "mercator" ? "active" : ""} onClick={() => setProjectionMode("mercator")}>Flat</button>
+          <button type="button" className={projectionMode === "globe" ? "active" : ""} onClick={() => setProjectionMode("globe")}>Earth</button>
+        </div>
+        <label className="map-slider-control">
+          <span>Heat Background Opacity</span>
+          <input
+            type="range"
+            min={0.03}
+            max={0.25}
+            step={0.01}
+            value={heatFillOpacity}
+            onChange={(e) => setHeatFillOpacity(Number(e.target.value))}
+          />
+        </label>
+        <label className="map-slider-control">
+          <span>Planner Confidence: {Math.round(requiredConfidence * 100)}%</span>
+          <input
+            type="range"
+            min={50}
+            max={95}
+            step={5}
+            value={Math.round(requiredConfidence * 100)}
+            onChange={(e) => setRequiredConfidence(Number(e.target.value) / 100)}
+          />
+        </label>
+        <label className="map-switch">
+          <input type="checkbox" checked={showLegend} onChange={(e) => setShowLegend(e.target.checked)} />
+          <span>Legend</span>
+        </label>
+        {showLegend && (
+          <label className="map-switch">
+            <input type="checkbox" checked={minimizeLegend} onChange={(e) => setMinimizeLegend(e.target.checked)} />
+            <span>Compact Legend</span>
+          </label>
+        )}
+      </div>
+
+      {data?.cheeger_resistance_summary?.enabled && (
+        <div className="map-layer-summary">
+          <span>Cheeger cells: {data.cheeger_resistance_summary.cheeger_boundary_cells ?? 0}</span>
+          <span>Low cooling access: {data.cheeger_resistance_summary.low_cooling_access_cells ?? 0}</span>
+        </div>
+      )}
+    </aside>
+  );
+
   return (
     <div className="map-page">
       <header className="map-page-hero">
@@ -2297,9 +2668,9 @@ export function MapPage() {
 
       <section className="map-control-shell">
         <div className="street-legend-section">
-          <strong>Heat Corridor Layers</strong>
+          <strong>Run Setup</strong>
           <div className="street-legend-subtext">
-            Toggle the two source-specific overlays independently. Use both to compare where each sensor flags hotspots.
+            Choose a run, search a location, and keep live map controls beside the map.
           </div>
         </div>
 
@@ -2487,159 +2858,6 @@ export function MapPage() {
           </div>
         </label>
 
-        <label>
-          Layers
-          <div className="map-compare-toggle">
-            <label>
-              <input
-                type="checkbox"
-                checked={streetLevelMode}
-                onChange={(e) => setStreetLevelMode(e.target.checked)}
-                aria-label="Toggle street level intervention mode"
-              />
-              <span>Street Level Mode</span>
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={showHeatCorridors}
-                onChange={(e) => setShowHeatCorridors(e.target.checked)}
-                aria-label="Toggle heat corridor layer"
-              />
-              <span>Heat Corridor Overlays</span>
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={showLandsatHeatCorridors}
-                onChange={(e) => setShowLandsatHeatCorridors(e.target.checked)}
-                aria-label="Toggle Landsat heat corridor layer"
-              />
-              <span>Landsat Heat Corridors</span>
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={showEcostressHeatCorridors}
-                onChange={(e) => setShowEcostressHeatCorridors(e.target.checked)}
-                aria-label="Toggle ECOSTRESS heat corridor layer"
-              />
-              <span>ECOSTRESS Heat Corridors</span>
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={showInterventions}
-                onChange={(e) => setShowInterventions(e.target.checked)}
-                aria-label="Toggle intervention layer"
-              />
-              <span>Interventions</span>
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={showInterventionCircles}
-                onChange={(e) => setShowInterventionCircles(e.target.checked)}
-                aria-label="Toggle intervention circles"
-              />
-              <span>Intervention Circles</span>
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={animateCircles}
-                onChange={(e) => setAnimateCircles(e.target.checked)}
-                aria-label="Toggle circle animation"
-              />
-              <span>Animate Circles</span>
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={showLegend}
-                onChange={(e) => setShowLegend(e.target.checked)}
-                aria-label="Toggle legend"
-              />
-              <span>Show Legend</span>
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={minimizeLegend}
-                onChange={(e) => setMinimizeLegend(e.target.checked)}
-                aria-label="Minimize legend"
-              />
-              <span>Minimize Legend</span>
-            </label>
-            <label>
-              <span>Heat Background Opacity</span>
-              <input
-                type="range"
-                min={0.03}
-                max={0.25}
-                step={0.01}
-                value={heatFillOpacity}
-                onChange={(e) => setHeatFillOpacity(Number(e.target.value))}
-                aria-label="Set heat background opacity"
-              />
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={showStudyAreaBoundary}
-                onChange={(e) => setShowStudyAreaBoundary(e.target.checked)}
-                aria-label="Toggle study area boundary"
-              />
-              <span>📍 Study Area Boundary</span>
-            </label>
-          </div>
-        </label>
-
-        <label>
-          Planner Confidence
-          <div className="planner-confidence-control">
-            <input
-              type="range"
-              min={50}
-              max={95}
-              step={5}
-              value={Math.round(requiredConfidence * 100)}
-              onChange={(e) => setRequiredConfidence(Number(e.target.value) / 100)}
-              aria-label="Set required planner confidence"
-            />
-            <span>{Math.round(requiredConfidence * 100)}% required</span>
-          </div>
-        </label>
-
-        <label>
-          View
-          <div className="map-compare-toggle">
-            <label>
-              <input
-                type="radio"
-                name="projectionMode"
-                checked={projectionMode === "globe"}
-                onChange={() => setProjectionMode("globe")}
-                aria-label="Show Earth globe view"
-              />
-              <span>Earth</span>
-            </label>
-            <label>
-              <input
-                type="radio"
-                name="projectionMode"
-                checked={projectionMode === "mercator"}
-                onChange={() => setProjectionMode("mercator")}
-                aria-label="Show flat map view"
-              />
-              <span>Flat</span>
-            </label>
-          </div>
-          {projectionMode === "globe" && (
-            <div className="street-legend-note">Earth mode: drag map to rotate globe around Boston.</div>
-          )}
-        </label>
-
         {compareMode && (
           <label>
             Secondary Run
@@ -2672,6 +2890,7 @@ export function MapPage() {
 
       {!compareMode && (
         <div className="street-map-layout">
+          {renderLayerRail(leftQuery.data)}
           <div
             ref={singleMapContainerRef}
             className={`map-container-with-legend${projectionMode === "globe" ? " map-container-earth" : ""} ${fullscreenMap === "single" ? "map-container-fullscreen" : ""}`}
@@ -2704,6 +2923,8 @@ export function MapPage() {
               data={leftQuery.data}
               mapKey="single"
               showHeatCorridors={showHeatCorridors}
+              showCheegerBottleneck={showCheegerBottleneck}
+              showCoolingResistance={showCoolingResistance}
               showInterventions={showInterventions}
               showInterventionCircles={showInterventionCircles}
               animateCircles={animateCircles}
@@ -2717,6 +2938,7 @@ export function MapPage() {
               addressFocus={addressFocus}
               plannedInterventions={plannedInterventionLayer}
               requiredConfidence={requiredConfidence}
+              resetViewToken={resetViewToken}
               onAnimationStateChange={setAnimationStatusSingle}
             />
             {leftQuery.data && (
@@ -2752,6 +2974,8 @@ export function MapPage() {
                   <span>{Number.isFinite(streetSelection.avgTemp) ? `${streetSelection.avgTemp.toFixed(2)}°C avg` : "Avg temp unavailable"}</span>
                   <span>{streetSelection.isHeatCorridor ? "Heat Corridor" : "Non-corridor street"}</span>
                   <span>{streetSelection.nearbyCells.length} nearby cells</span>
+                  <span>Cheeger {Number(streetSelection.sourceProperties.cheeger_priority ?? 0).toFixed(0)}</span>
+                  <span>Resistance {Number(streetSelection.sourceProperties.cooling_sink_resistance_proxy ?? 0).toFixed(0)}</span>
                 </div>
 
                 <div className="street-action-plan">
@@ -2849,6 +3073,8 @@ export function MapPage() {
       )}
 
       {compareMode && (
+        <div className="map-compare-workbench">
+          {renderLayerRail(leftQuery.data, "Compare Controls")}
         <div className="map-compare-grid">
           <div className="map-compare-column">
             <div
@@ -2886,6 +3112,8 @@ export function MapPage() {
                 data={leftQuery.data}
                 mapKey="left"
                 showHeatCorridors={showHeatCorridors}
+                showCheegerBottleneck={showCheegerBottleneck}
+                showCoolingResistance={showCoolingResistance}
                 showInterventions={showInterventions}
                 showInterventionCircles={showInterventionCircles}
                 animateCircles={animateCircles}
@@ -2899,6 +3127,7 @@ export function MapPage() {
                 addressFocus={addressFocus}
                 plannedInterventions={plannedInterventionLayer}
                 requiredConfidence={requiredConfidence}
+                resetViewToken={resetViewToken}
                 onAnimationStateChange={setAnimationStatusLeft}
               />
               {leftQuery.data && showLegend && <MapLegend data={leftQuery.data} minimized={minimizeLegend} />}
@@ -2922,6 +3151,8 @@ export function MapPage() {
                     <span>{Number.isFinite(streetSelectionLeft.avgTemp) ? `${streetSelectionLeft.avgTemp.toFixed(2)}°C avg` : "Avg temp unavailable"}</span>
                     <span>{streetSelectionLeft.isHeatCorridor ? "Heat Corridor" : "Non-corridor street"}</span>
                     <span>{streetSelectionLeft.nearbyCells.length} nearby cells</span>
+                    <span>Cheeger {Number(streetSelectionLeft.sourceProperties.cheeger_priority ?? 0).toFixed(0)}</span>
+                    <span>Resistance {Number(streetSelectionLeft.sourceProperties.cooling_sink_resistance_proxy ?? 0).toFixed(0)}</span>
                   </div>
                   <div className="street-selection-panel-section-title">Recommended Actions</div>
                   {streetSelectionLeft.recommendations.length > 0 ? (
@@ -2981,6 +3212,8 @@ export function MapPage() {
                 data={rightQuery.data}
                 mapKey="right"
                 showHeatCorridors={showHeatCorridors}
+                showCheegerBottleneck={showCheegerBottleneck}
+                showCoolingResistance={showCoolingResistance}
                 showInterventions={showInterventions}
                 showInterventionCircles={showInterventionCircles}
                 animateCircles={animateCircles}
@@ -2994,6 +3227,7 @@ export function MapPage() {
                 addressFocus={addressFocus}
                 plannedInterventions={plannedInterventionLayer}
                 requiredConfidence={requiredConfidence}
+                resetViewToken={resetViewToken}
                 onAnimationStateChange={setAnimationStatusRight}
               />
               {rightQuery.data && showLegend && <MapLegend data={rightQuery.data} minimized={minimizeLegend} />}
@@ -3017,6 +3251,8 @@ export function MapPage() {
                     <span>{Number.isFinite(streetSelectionRight.avgTemp) ? `${streetSelectionRight.avgTemp.toFixed(2)}°C avg` : "Avg temp unavailable"}</span>
                     <span>{streetSelectionRight.isHeatCorridor ? "Heat Corridor" : "Non-corridor street"}</span>
                     <span>{streetSelectionRight.nearbyCells.length} nearby cells</span>
+                    <span>Cheeger {Number(streetSelectionRight.sourceProperties.cheeger_priority ?? 0).toFixed(0)}</span>
+                    <span>Resistance {Number(streetSelectionRight.sourceProperties.cooling_sink_resistance_proxy ?? 0).toFixed(0)}</span>
                   </div>
                   <div className="street-selection-panel-section-title">Recommended Actions</div>
                   {streetSelectionRight.recommendations.length > 0 ? (
@@ -3040,6 +3276,7 @@ export function MapPage() {
               )}
             </aside>
           </div>
+        </div>
         </div>
       )}
     </div>

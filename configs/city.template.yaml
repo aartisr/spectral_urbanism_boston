@@ -105,3 +105,16 @@ optimization:
   # +w bonus for corridor targets, -w penalty for non-corridor targets.
   # Keep small (e.g., 1e-5 to 5e-5) so objective score still dominates.
   corridor_preference_weight: 0.0
+
+spatial_diagnostics:
+  # Produces plug-and-play vector layers:
+  # cheeger_bottleneck.geojson, low_cooling_access_zones.geojson,
+  # cooling_access_cells.geojson, and cheeger_resistance_summary.json.
+  enabled: true
+  # When true, Cheeger boundary cells and low cooling-access cells are included
+  # in the optimizer's soft corridor preference set.
+  use_as_corridor_preference: true
+  access_low_threshold: 35.0
+  access_very_low_threshold: 20.0
+  sink_ndvi_quantile: 0.75
+  sink_temp_quantile: 0.25

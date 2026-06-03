@@ -281,8 +281,19 @@ export function ConfigsPage() {
   const canUseProfiles = useMemo(() => Boolean(parseJsonConfig(form.state.values.configJson)), [form.state.values.configJson]);
 
   return (
-    <div>
-      <h2>Configs</h2>
+    <main className="page-stack">
+      <header className="page-header-row">
+        <div>
+          <div className="eyebrow">Configuration Studio</div>
+          <h1>Configs</h1>
+          <p>Compose generic city runs, tune intervention families, validate schema, and launch jobs.</p>
+        </div>
+        <div className="status-card status-card-ready">
+          <span className="status-card-label">Plug-and-play</span>
+          <strong>{readInterventions(form.state.values.configJson).filter((row) => row.enabled).length}</strong>
+          <span>enabled intervention types</span>
+        </div>
+      </header>
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -544,8 +555,11 @@ export function ConfigsPage() {
       </form>
 
       {result && (
-        <pre className="code-block code-block-top-gap">{result}</pre>
+        <section className="content-panel">
+          <h2>Launch Result</h2>
+          <pre className="code-block code-block-top-gap">{result}</pre>
+        </section>
       )}
-    </div>
+    </main>
   );
 }

@@ -47,14 +47,27 @@ class AppErrorBoundary extends React.Component<
 function RootLayout() {
   return (
     <div className="app-shell">
-      <h1>Spectral Urbanism Console</h1>
-      <nav className="app-nav">
-        <Link to="/">Home</Link>
-        <Link to="/runs" search={normalizeRunsSearch({})}>Runs</Link>
-        <Link to="/configs">Configs</Link>
-        <Link to="/map">Map</Link>
-      </nav>
-      <Outlet />
+      <aside className="app-sidebar" aria-label="Primary navigation">
+        <Link to="/" className="app-brand" aria-label="Spectral Urbanism home">
+          <span className="app-brand-mark">SU</span>
+          <span>
+            <span className="app-brand-title">Spectral Urbanism</span>
+            <span className="app-brand-subtitle">City intervention workbench</span>
+          </span>
+        </Link>
+        <nav className="app-nav">
+          <Link to="/">Overview</Link>
+          <Link to="/map">Map</Link>
+          <Link to="/runs" search={normalizeRunsSearch({})}>Runs</Link>
+          <Link to="/configs">Configs</Link>
+        </nav>
+        <div className="app-sidebar-note">
+          Generic pipelines, explainable artifacts, and street-level mitigation in one workspace.
+        </div>
+      </aside>
+      <div className="app-main">
+        <Outlet />
+      </div>
     </div>
   );
 }

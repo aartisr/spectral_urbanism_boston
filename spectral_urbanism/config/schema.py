@@ -97,6 +97,9 @@ class FeatureConfig(BaseModel):
   rasters: dict[str, dict | str] = Field(default_factory=dict)
   defaults: dict[str, float] = Field(default_factory=dict)
   provided_columns: list[str] = Field(default_factory=list)
+  thermal_source: str | None = None
+  thermal_source_timestamp: str | None = None
+  observed_temp_timestamp: str | None = None
 
 
 class DataPathsConfig(BaseModel):
@@ -123,6 +126,17 @@ class OptimizationConfig(BaseModel):
   corridor_preference_weight: float = 0.0
 
 
+class SpatialDiagnosticsConfig(BaseModel):
+  model_config = ConfigDict(extra="forbid")
+
+  enabled: bool = True
+  use_as_corridor_preference: bool = True
+  access_low_threshold: float = Field(default=35.0, ge=0, le=100)
+  access_very_low_threshold: float = Field(default=20.0, ge=0, le=100)
+  sink_ndvi_quantile: float = Field(default=0.75, ge=0, le=1)
+  sink_temp_quantile: float = Field(default=0.25, ge=0, le=1)
+
+
 class BaselinesConfig(BaseModel):
   model_config = ConfigDict(extra="forbid")
 
@@ -143,3 +157,4 @@ class CityPipelineConfig(BaseModel):
   baselines: BaselinesConfig = Field(default_factory=BaselinesConfig)
   experiments: ExperimentConfig = Field(default_factory=ExperimentConfig)
   optimization: OptimizationConfig = Field(default_factory=OptimizationConfig)
+  spatial_diagnostics: SpatialDiagnosticsConfig = Field(default_factory=SpatialDiagnosticsConfig)

@@ -95,6 +95,86 @@ def _kind_to_icon(kind: str) -> str:
     return kind[:2].upper() if kind else "NA"
 
 
+def _empty_feature_collection() -> dict:
+    return {"type": "FeatureCollection", "features": []}
+
+
+def _read_geojson(path: Path) -> dict:
+    if not path.exists():
+        return _empty_feature_collection()
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(parsed, dict) and parsed.get("type") == "FeatureCollection":
+            return parsed
+    except Exception:
+        return _empty_feature_collection()
+    return _empty_feature_collection()
+
+
+def _read_json_dict(path: Path) -> dict:
+    if not path.exists():
+        return {"enabled": False, "reason": "artifact_missing"}
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        return {"enabled": False, "reason": "artifact_unreadable"}
+    return {"enabled": False, "reason": "artifact_invalid"}
+
+
+def _merge_diagnostic_properties(grid, diagnostics_geojson: dict) -> None:
+    features = diagnostics_geojson.get("features")
+    if not isinstance(features, list) or "cell_id" not in grid.columns:
+        return
+
+    props_by_cell: dict[int, dict] = {}
+    for feature in features:
+        if not isinstance(feature, dict):
+            continue
+        props = feature.get("properties")
+        if not isinstance(props, dict):
+            continue
+        try:
+            cid = int(props.get("cell_id"))
+        except (TypeError, ValueError):
+            continue
+        props_by_cell[cid] = props
+
+    diagnostic_columns = [
+        "cheeger_side",
+        "cheeger_boundary",
+        "cheeger_fiedler",
+        "cheeger_rank",
+        "cheeger_priority",
+        "cheeger_priority_class",
+        "cooling_sink",
+        "cooling_access_score",
+        "cooling_sink_resistance_proxy",
+        "cooling_access_class",
+        "low_cooling_access",
+        "street_intervention_signal",
+    ]
+    defaults = {
+        "cheeger_side": "",
+        "cheeger_boundary": False,
+        "cheeger_fiedler": 0.0,
+        "cheeger_rank": -1,
+        "cheeger_priority": 0.0,
+        "cheeger_priority_class": "unavailable",
+        "cooling_sink": False,
+        "cooling_access_score": 0.0,
+        "cooling_sink_resistance_proxy": 0.0,
+        "cooling_access_class": "unavailable",
+        "low_cooling_access": False,
+        "street_intervention_signal": 0.0,
+    }
+    for column in diagnostic_columns:
+        grid[column] = grid["cell_id"].map(
+            lambda cid, col=column: props_by_cell.get(int(cid), {}).get(col, defaults[col])
+        )
+
+
 @router.post("/runs", response_model=RunCreateResponse)
 def create_run(req: RunCreateRequest) -> RunCreateResponse:
     run_id = str(uuid4())
@@ -298,6 +378,10 @@ def get_run_map(run_id: str, source: str | None = Query(None, description="Optio
     selected_path = out_dir / "selected_interventions.json"
     eligibility_path = out_dir / "eligibility_summary.json"
     impact_summary_path = out_dir / "intervention_impact_summary.json"
+    diagnostics_cells_path = out_dir / "cooling_access_cells.geojson"
+    cheeger_bottleneck_path = out_dir / "cheeger_bottleneck.geojson"
+    low_cooling_access_path = out_dir / "low_cooling_access_zones.geojson"
+    cheeger_summary_path = out_dir / "cheeger_resistance_summary.json"
     if not selected_path.exists():
         raise HTTPException(status_code=409, detail="selected interventions not ready")
 
@@ -375,6 +459,9 @@ def get_run_map(run_id: str, source: str | None = Query(None, description="Optio
     grid["selected_explanations"] = grid["cell_id"].map(
         lambda cid: " | ".join(selected_explanations.get(int(cid), []))
     )
+
+    diagnostics_cells_geojson = _read_geojson(diagnostics_cells_path)
+    _merge_diagnostic_properties(grid, diagnostics_cells_geojson)
 
     # Heat corridors: high observed temperature cells based on configured observed temp column.
     lst_column = str(cfg.get("features", {}).get("observed_temp_column", "lst"))
@@ -464,6 +551,10 @@ def get_run_map(run_id: str, source: str | None = Query(None, description="Optio
     else:
         thermal_data_timestamp = datetime.now(UTC).isoformat()
 
+    cheeger_bottleneck_geojson = _read_geojson(cheeger_bottleneck_path)
+    low_cooling_access_geojson = _read_geojson(low_cooling_access_path)
+    cheeger_resistance_summary = _read_json_dict(cheeger_summary_path)
+
     return {
         "run_id": run_id,
         "city": str(city_cfg.get("name", "city")),
@@ -501,5 +592,8 @@ def get_run_map(run_id: str, source: str | None = Query(None, description="Optio
         },
         "selected_intervention_kinds": sorted({k for kinds in selected_kinds.values() for k in kinds}),
         "intervention_impact_summary": impact_summary_raw,
+        "cheeger_bottleneck_geojson": cheeger_bottleneck_geojson,
+        "low_cooling_access_geojson": low_cooling_access_geojson,
+        "cheeger_resistance_summary": cheeger_resistance_summary,
         "geojson": json.loads(grid.to_json()),
     }

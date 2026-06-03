@@ -17,6 +17,10 @@ from spectral_urbanism.experiments.fairness import build_fairness_audit
 from spectral_urbanism.experiments.provenance import build_provenance_manifest
 from spectral_urbanism.experiments.qa import build_data_quality_report
 from spectral_urbanism.experiments.report import save_history_csv, save_json
+from spectral_urbanism.experiments.spatial_artifacts import (
+  attach_cheeger_resistance_columns,
+  write_spatial_diagnostic_artifacts,
+)
 from spectral_urbanism.graph.build import build_graph
 from spectral_urbanism.graph.laplacian import normalized_laplacian
 from spectral_urbanism.model.gmrf import fit_gmrf
@@ -48,6 +52,7 @@ class RunContext:
   eligibility_source: str
   weights: ObjectiveWeights
   greedy_result: GreedyResult
+  spatial_diagnostics_summary: dict[str, Any]
 
 
 def _ensure_observed_temp_column(grid_feat: gpd.GeoDataFrame, cfg: dict[str, Any]) -> tuple[gpd.GeoDataFrame, str | None]:
@@ -267,6 +272,20 @@ def build_run_context(cfg: dict[str, Any]) -> RunContext:
   posterior = fit_gmrf(Q, y=y, obs_idx=obs_idx, obs_noise=float(cfg["gmrf"]["obs_noise"]))
   temp_mean = posterior.mean
 
+  spatial_summary: dict[str, Any] = {"enabled": False}
+  spatial_cfg = cfg.get("spatial_diagnostics", {})
+  if bool(spatial_cfg.get("enabled", True)):
+    grid_feat, spatial_summary = attach_cheeger_resistance_columns(
+      grid_feat,
+      G,
+      temp_values=np.asarray(temp_mean, dtype=float),
+      temp_col=lst_column,
+      access_low_threshold=float(spatial_cfg.get("access_low_threshold", 35.0)),
+      access_very_low_threshold=float(spatial_cfg.get("access_very_low_threshold", 20.0)),
+      sink_ndvi_quantile=float(spatial_cfg.get("sink_ndvi_quantile", 0.75)),
+      sink_temp_quantile=float(spatial_cfg.get("sink_temp_quantile", 0.25)),
+    )
+
   svi_column = str(cfg["objective"]["equity"]["svi_column"])
   vulnerability = grid_feat[svi_column].values.astype(float)
 
@@ -275,6 +294,13 @@ def build_run_context(cfg: dict[str, Any]) -> RunContext:
   effects = cfg["interventions"]["effects"]
   eligible_nodes, eligibility_source = _eligible_intervention_nodes(grid_feat, dp)
   corridor_nodes = _heat_corridor_nodes(grid_feat)
+  if bool(spatial_cfg.get("use_as_corridor_preference", True)) and "cell_id" in grid_feat.columns:
+    diagnostic_mask = np.zeros(len(grid_feat), dtype=bool)
+    if "cheeger_boundary" in grid_feat.columns:
+      diagnostic_mask |= grid_feat["cheeger_boundary"].astype(bool).to_numpy()
+    if "low_cooling_access" in grid_feat.columns:
+      diagnostic_mask |= grid_feat["low_cooling_access"].astype(bool).to_numpy()
+    corridor_nodes |= set(map(int, grid_feat.loc[diagnostic_mask, "cell_id"].tolist()))
   if eligible_nodes:
     cands = candidate_interventions(sorted(eligible_nodes), kinds, costs)
   else:
@@ -318,6 +344,7 @@ def build_run_context(cfg: dict[str, Any]) -> RunContext:
     eligibility_source=eligibility_source,
     weights=weights,
     greedy_result=res,
+    spatial_diagnostics_summary=spatial_summary,
   )
 
 
@@ -403,6 +430,8 @@ def run(config_path: str) -> str:
   save_history_csv(os.path.join(out_dir, "greedy_history.csv"), res.history)
   save_json(os.path.join(out_dir, "selected_interventions.json"), selected_interventions)
   save_json(os.path.join(out_dir, "intervention_impact_summary.json"), intervention_impact_summary)
+  if context.spatial_diagnostics_summary.get("enabled"):
+    write_spatial_diagnostic_artifacts(out_dir, context.grid_feat, context.spatial_diagnostics_summary)
   eligible_nodes = context.eligible_nodes
   eligible_count = int(len(eligible_nodes)) if eligible_nodes is not None else int(len(context.grid_feat))
   save_json(

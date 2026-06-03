@@ -141,12 +141,30 @@ export function RunsPage() {
   const runs = (runsQuery.data?.runs ?? []) as RunRecord[];
   const total = Number(runsQuery.data?.total ?? 0);
   const hasNext = Boolean(runsQuery.data?.has_next);
+  const succeeded = runs.filter((run) => run.status === "succeeded").length;
+  const active = runs.filter((run) => ["queued", "running"].includes(String(run.status))).length;
+  const failed = runs.filter((run) => run.status === "failed").length;
   const table = useReactTable({ data: runs, columns, getCoreRowModel: getCoreRowModel() });
 
   return (
-    <div>
-      <h2>Runs</h2>
-      <p>Use the Configs page to launch runs. This table refreshes automatically.</p>
+    <main className="page-stack">
+      <header className="page-header-row">
+        <div>
+          <div className="eyebrow">Execution Registry</div>
+          <h1>Runs</h1>
+          <p>Launch, filter, and inspect reproducible city optimization runs. The table refreshes automatically.</p>
+        </div>
+        <Link className="primary-link-button" to="/configs">New Run</Link>
+      </header>
+
+      <section className="metric-strip">
+        <div className="metric-card"><span>Total</span><strong>{total}</strong></div>
+        <div className="metric-card"><span>Visible succeeded</span><strong>{succeeded}</strong></div>
+        <div className="metric-card"><span>Visible active</span><strong>{active}</strong></div>
+        <div className="metric-card"><span>Visible failed</span><strong>{failed}</strong></div>
+      </section>
+
+      <section className="content-panel">
       <div className="runs-controls">
         <label>
           Status
@@ -296,6 +314,7 @@ export function RunsPage() {
           Next
         </button>
       </div>
-    </div>
+      </section>
+    </main>
   );
 }
