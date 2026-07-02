@@ -1635,6 +1635,9 @@ function MapLibreRunMapCanvas({
     };
 
     const resetStaticRadii = () => {
+      if (map.getLayer(fillId)) {
+        map.setPaintProperty(fillId, "fill-opacity", heatFillOpacity);
+      }
       if (map.getLayer(selFillId)) {
         map.setPaintProperty(selFillId, "fill-opacity", 0.1);
       }
@@ -1676,6 +1679,12 @@ function MapLibreRunMapCanvas({
 
       stopAnimation();
 
+      if (!data?.geojson) {
+        resetStaticRadii();
+        emitAnimationStatus("waiting_style", "Waiting for map data");
+        return;
+      }
+
       const shouldAnimate =
         Boolean(animateCircles) &&
         Boolean(showInterventions) &&
@@ -1684,17 +1693,19 @@ function MapLibreRunMapCanvas({
       if (!shouldAnimate) {
         resetStaticRadii();
         if (!animateCircles) {
-          emitAnimationStatus("blocked", "Animate Circles toggle is off");
+          emitAnimationStatus("blocked", "Turn on Animate Circles to start the pulse");
         } else if (!showInterventions) {
-          emitAnimationStatus("blocked", "Interventions layer is hidden");
+          emitAnimationStatus("blocked", "Show Interventions to animate the selected cells");
         } else {
-          emitAnimationStatus("blocked", "No map data available for animation");
+          emitAnimationStatus("blocked", "Waiting for map data");
         }
         return;
       }
 
       const temps = getObservedTemps(data?.geojson);
       const hasThermalVariation = temps.length > 1;
+      const selectedCellCount = Number(data?.selected_cells ?? 0);
+      const useCityWideFallback = selectedCellCount <= 0;
 
       const ensureSelectedLayers = () => {
         if (!map.getSource(sourceId)) {
@@ -1744,6 +1755,20 @@ function MapLibreRunMapCanvas({
         }
       };
 
+      const applyCityWidePulse = (wave: number) => {
+        if (map.getLayer(fillId)) {
+          map.setPaintProperty(fillId, "fill-opacity", Math.min(0.3, 0.08 + wave * 0.16));
+        }
+        if (map.getLayer(lineId)) {
+          map.setPaintProperty(lineId, "line-opacity", 0.12 + wave * 0.14);
+          map.setPaintProperty(lineId, "line-width", 0.2 + wave * 0.45);
+        }
+        if (map.getLayer(ambientLineId)) {
+          map.setPaintProperty(ambientLineId, "line-opacity", 0.07 + wave * 0.3);
+          map.setPaintProperty(ambientLineId, "line-width", 0.45 + wave * 1.55);
+        }
+      };
+
       const animate = () => {
         if (cancelled) {
           heatmapAnimationFrameRef.current = null;
@@ -1760,6 +1785,16 @@ function MapLibreRunMapCanvas({
           return;
         }
 
+        if (useCityWideFallback) {
+          emitAnimationStatus("running", "Pulse active (city-wide fallback)");
+          const phase = (Date.now() % 2200) / 2200;
+          const wave = (Math.sin(phase * Math.PI * 2) + 1) / 2;
+          applyCityWidePulse(wave);
+          map.triggerRepaint();
+          heatmapAnimationFrameRef.current = requestAnimationFrame(animate);
+          return;
+        }
+
         const hasSelectedFillLayer = Boolean(map.getLayer(selFillId));
         const hasSelectedLineLayer = Boolean(map.getLayer(selLineId));
         const hasAmbientLineLayer = Boolean(map.getLayer(ambientLineId));
@@ -1771,9 +1806,9 @@ function MapLibreRunMapCanvas({
           const hasAmbientAfter = Boolean(map.getLayer(ambientLineId));
           if (!hasSelectedFillLayerAfter && !hasSelectedLineLayerAfter && !hasAmbientAfter) {
             if (Number(data?.selected_cells ?? 0) <= 0) {
-              emitAnimationStatus("blocked", "No selected intervention cells in this run");
+              emitAnimationStatus("blocked", "No selected interventions in this run yet");
             } else {
-              emitAnimationStatus("blocked", "Intervention layers unavailable");
+              emitAnimationStatus("blocked", "Intervention layers are still loading");
             }
           }
           heatmapAnimationFrameRef.current = requestAnimationFrame(animate);
@@ -1825,10 +1860,14 @@ function MapLibreRunMapCanvas({
     data?.geojson,
     onAnimationStateChange,
     ambientLineId,
+    fillId,
+    heatFillOpacity,
+    lineId,
     selFillId,
     selLineId,
     showInterventionCircles,
     showInterventions,
+    data?.selected_cells,
   ]);
 
   useEffect(() => {
@@ -1884,7 +1923,7 @@ function RunMapCanvas(props: {
 function AnimationStatusBadge({ status, label }: { status: AnimationStatus; label?: string }) {
   const stateLabel = {
     running: "Running",
-    blocked: "Blocked",
+    blocked: "Needs Setup",
     waiting_style: "Waiting",
     stopped: "Stopped",
   }[status.state];
@@ -1894,6 +1933,25 @@ function AnimationStatusBadge({ status, label }: { status: AnimationStatus; labe
       {label ? `${label}: ` : ""}Animation {stateLabel} - {status.reason}
     </span>
   );
+}
+
+function AnimationStatusHint({ status }: { status: AnimationStatus }) {
+  if (status.state === "running") {
+    return null;
+  }
+
+  const hint =
+    status.state === "waiting_style"
+      ? "No action needed. The map will try again when the style and data finish loading."
+      : status.reason.includes("Animate Circles")
+        ? "Turn on Animate Circles in the controls above."
+        : status.reason.includes("Interventions")
+          ? "Show Interventions, or pick a run with selected intervention cells."
+          : status.reason.includes("selected interventions")
+            ? "Pick a run that has selected intervention cells to see the pulse."
+            : "The animation will recover automatically once the map is ready.";
+
+  return <span className="animation-status-hint">{hint}</span>;
 }
 
 function MapLegend({ data, minimized }: { data: RunMapResponse; minimized: boolean }) {
@@ -2918,6 +2976,7 @@ export function MapPage() {
             </div>
             <div className="map-panel-animation-status">
               <AnimationStatusBadge status={animationStatusSingle} />
+              <AnimationStatusHint status={animationStatusSingle} />
             </div>
             <RunMapCanvas
               data={leftQuery.data}
@@ -3105,6 +3164,7 @@ export function MapPage() {
               </div>
               <div className="map-panel-animation-status">
                 <AnimationStatusBadge status={animationStatusLeft} label="Primary" />
+                <AnimationStatusHint status={animationStatusLeft} />
               </div>
               <ThermalTrustBadge data={leftQuery.data} compact />
               <NoSelectionsBanner data={leftQuery.data} label="Primary run" />
@@ -3203,6 +3263,7 @@ export function MapPage() {
               </div>
               <div className="map-panel-animation-status">
                 <AnimationStatusBadge status={animationStatusRight} label="Secondary" />
+                <AnimationStatusHint status={animationStatusRight} />
               </div>
               {rightQuery.isLoading && <p>Loading secondary map data...</p>}
               <ThermalTrustBadge data={rightQuery.data} compact />

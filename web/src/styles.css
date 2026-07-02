@@ -759,30 +759,34 @@ textarea:focus-visible {
 .animation-status-badge {
   display: inline-flex;
   align-items: center;
+  gap: 6px;
   padding: 4px 10px;
   border-radius: 999px;
-  border: 1px solid transparent;
+  border: 1px solid rgba(148, 163, 184, 0.28);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 
 .animation-status-running {
-  color: #0f5132;
-  background: #d1e7dd;
-  border-color: #badbcc;
+  color: #0f766e;
+  background: rgba(209, 250, 229, 0.88);
+  border-color: rgba(45, 212, 191, 0.32);
 }
 
 .animation-status-blocked {
-  color: #664d03;
-  background: #fff3cd;
-  border-color: #ffecb5;
+  color: #854d0e;
+  background: rgba(254, 243, 199, 0.9);
+  border-color: rgba(251, 191, 36, 0.28);
 }
 
 .animation-status-waiting_style,
 .animation-status-stopped {
-  color: #41464b;
-  background: #e2e3e5;
-  border-color: #d3d6d8;
+  color: #475569;
+  background: rgba(241, 245, 249, 0.9);
+  border-color: rgba(148, 163, 184, 0.28);
 }
 
 .thermal-badge-container {
@@ -1082,13 +1086,26 @@ textarea:focus-visible {
   top: 56px;
   left: 12px;
   z-index: 1250;
+  display: grid;
+  gap: 6px;
   max-width: min(65vw, 560px);
   pointer-events: none;
 }
 
 .map-panel-animation-status .animation-status-badge {
   background-clip: padding-box;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.12);
+}
+
+.animation-status-hint {
+  display: inline-block;
+  max-width: min(65vw, 560px);
+  padding: 0 2px;
+  color: rgba(15, 23, 42, 0.7);
+  font-size: 11px;
+  line-height: 1.35;
+  font-weight: 600;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.45);
 }
 
 .map-container-fullscreen .map-panel-animation-status {
