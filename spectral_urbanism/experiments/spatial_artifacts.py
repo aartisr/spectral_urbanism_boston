@@ -43,6 +43,8 @@ def attach_cheeger_resistance_columns(
   access_very_low_threshold: float = 20.0,
   sink_ndvi_quantile: float = 0.75,
   sink_temp_quantile: float = 0.25,
+  sink_selection_mode: str = "intersection",
+  validate_access_variation: bool = True,
 ) -> tuple[gpd.GeoDataFrame, dict[str, Any]]:
   """Attach generic Cheeger bottleneck and cooling-resistance diagnostics."""
   out = grid_feat.copy()
@@ -57,6 +59,7 @@ def attach_cheeger_resistance_columns(
     ndvi_col=ndvi_col,
     ndvi_quantile=sink_ndvi_quantile,
     temp_quantile=sink_temp_quantile,
+    selection_mode=sink_selection_mode,
   )
   access_by_node = cooling_access_to_sinks(G, sinks)
 
@@ -77,6 +80,14 @@ def attach_cheeger_resistance_columns(
   out["cooling_access_score"] = cell_ids.map(lambda cid: float(access_by_node.get(int(cid), 0.0)))
   out["cooling_sink_resistance_proxy"] = out["cooling_access_score"].map(lambda score: float(100.0 - float(score)))
 
+  non_sink_access = out.loc[~out["cooling_sink"].astype(bool), "cooling_access_score"].to_numpy(dtype=float)
+  distinct_non_sink_scores = len({round(float(value), 6) for value in non_sink_access if np.isfinite(value)})
+  if validate_access_variation and len(non_sink_access) > 1 and distinct_non_sink_scores < 2:
+    raise ValueError(
+      "Cooling-access validation failed: non-sink cells have no score variation. "
+      "Use a more selective sink definition or inspect graph conductance before publishing a ranked access layer."
+    )
+
   poor_access_unit = np.clip(1.0 - np.asarray(out["cooling_access_score"].values, dtype=float) / 100.0, 0.0, 1.0)
   priority = 100.0 * (0.65 * heat_unit + 0.35 * poor_access_unit)
   out["cheeger_priority"] = np.where(out["cheeger_boundary"].values.astype(bool), priority, 0.0)
@@ -96,6 +107,9 @@ def attach_cheeger_resistance_columns(
     "cheeger_conductance": float(cheeger.conductance),
     "cheeger_boundary_cells": int(out["cheeger_boundary"].sum()),
     "cooling_sink_cells": int(out["cooling_sink"].sum()),
+    "sink_selection_mode": sink_selection_mode,
+    "cooling_access_distinct_non_sink_scores": distinct_non_sink_scores,
+    "cooling_access_rankable": bool(distinct_non_sink_scores >= 2),
     "low_cooling_access_cells": int(out["low_cooling_access"].sum()),
     "access_low_threshold": float(access_low_threshold),
     "access_very_low_threshold": float(access_very_low_threshold),

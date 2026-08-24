@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -135,6 +137,8 @@ class SpatialDiagnosticsConfig(BaseModel):
   access_very_low_threshold: float = Field(default=20.0, ge=0, le=100)
   sink_ndvi_quantile: float = Field(default=0.75, ge=0, le=1)
   sink_temp_quantile: float = Field(default=0.25, ge=0, le=1)
+  sink_selection_mode: Literal["intersection", "union"] = "intersection"
+  validate_access_variation: bool = True
 
 
 class BaselinesConfig(BaseModel):

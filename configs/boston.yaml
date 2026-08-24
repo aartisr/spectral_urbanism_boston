@@ -123,3 +123,5 @@ spatial_diagnostics:
   access_very_low_threshold: 20.0
   sink_ndvi_quantile: 0.75
   sink_temp_quantile: 0.25
+  sink_selection_mode: intersection
+  validate_access_variation: true

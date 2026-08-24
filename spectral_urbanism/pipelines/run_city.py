@@ -284,6 +284,8 @@ def build_run_context(cfg: dict[str, Any]) -> RunContext:
       access_very_low_threshold=float(spatial_cfg.get("access_very_low_threshold", 20.0)),
       sink_ndvi_quantile=float(spatial_cfg.get("sink_ndvi_quantile", 0.75)),
       sink_temp_quantile=float(spatial_cfg.get("sink_temp_quantile", 0.25)),
+      sink_selection_mode=str(spatial_cfg.get("sink_selection_mode", "intersection")),
+      validate_access_variation=bool(spatial_cfg.get("validate_access_variation", True)),
     )
 
   svi_column = str(cfg["objective"]["equity"]["svi_column"])

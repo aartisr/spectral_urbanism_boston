@@ -27,24 +27,29 @@ def infer_cooling_sinks(
   ndvi_col: str = "ndvi",
   ndvi_quantile: float = 0.75,
   temp_quantile: float = 0.25,
+  selection_mode: str = "intersection",
 ) -> set[int]:
-  """Infer cool/green sink cells from NDVI and temperature proxies.
+  """Infer cooling-sink cells from NDVI and temperature proxies.
 
-  A cell qualifies when it is relatively vegetated, relatively cool, or both.
-  If neither proxy is available, the coolest quartile from supplied temperatures
-  is used. The returned identifiers are `cell_id` values.
+  ``intersection`` (the default) requires a cell to be both relatively green
+  and relatively cool. This avoids treating a large share of the city as a
+  sink, which can collapse a network-access metric into a binary result.
+  ``union`` retains the earlier exploratory behaviour and is intentionally
+  opt-in. If the intersection is empty, a small joint-proxy fallback is used.
+  The returned identifiers are ``cell_id`` values.
   """
   if "cell_id" not in frame.columns or frame.empty:
     return set()
 
-  mask = np.zeros(len(frame), dtype=bool)
+  green_mask = np.zeros(len(frame), dtype=bool)
+  cool_mask = np.zeros(len(frame), dtype=bool)
 
   if ndvi_col in frame.columns:
     ndvi = np.asarray(frame[ndvi_col].values, dtype=float)
     finite = ndvi[np.isfinite(ndvi)]
     if finite.size > 0:
       threshold = float(np.quantile(finite, ndvi_quantile))
-      mask |= np.isfinite(ndvi) & (ndvi >= threshold)
+      green_mask = np.isfinite(ndvi) & (ndvi >= threshold)
 
   temps: np.ndarray | None = None
   if temp_values is not None:
@@ -56,10 +61,25 @@ def infer_cooling_sinks(
     finite = temps[np.isfinite(temps)]
     if finite.size > 0:
       threshold = float(np.quantile(finite, temp_quantile))
-      mask |= np.isfinite(temps) & (temps <= threshold)
+      cool_mask = np.isfinite(temps) & (temps <= threshold)
+
+  if selection_mode not in {"intersection", "union"}:
+    raise ValueError("selection_mode must be 'intersection' or 'union'")
+  if green_mask.any() and cool_mask.any():
+    mask = green_mask & cool_mask if selection_mode == "intersection" else green_mask | cool_mask
+  else:
+    mask = green_mask | cool_mask
 
   if not mask.any() and len(frame) > 0:
-    mask[: max(1, int(np.ceil(len(frame) * 0.05)))] = True
+    # Preserve a sparse, reproducible fallback instead of broadening every
+    # available proxy into a city-wide sink set.
+    joint_rank = np.zeros(len(frame), dtype=float)
+    if green_mask.size:
+      joint_rank += green_mask.astype(float)
+    if cool_mask.size:
+      joint_rank += cool_mask.astype(float)
+    selected = max(1, int(np.ceil(len(frame) * 0.05)))
+    mask[np.argsort(joint_rank)[-selected:]] = True
 
   return set(map(int, frame.loc[mask, "cell_id"].tolist()))
 
